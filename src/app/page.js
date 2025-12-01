@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { TrendingUp, Users, Plus, Check, X, Trophy, Clock, DollarSign, LogOut, LineChart } from 'lucide-react';
+import { TrendingUp, Users, Plus, Check, X, Trophy, Clock, DollarSign, LogOut, LineChart as LineChartIcon } from 'lucide-react';
 import { db } from '@/lib/firebase';
 import { 
   collection, 
