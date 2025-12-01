@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { TrendingUp, Users, Plus, Check, X, Trophy, Clock, DollarSign, LogOut, LineChart } from 'lucide-react';
 import { db } from '@/lib/firebase';
 import { 
@@ -254,21 +255,87 @@ export default function CranMarket() {
     );
   };
   
-  const PriceTimeline = ({ history }) => (
-    <div className="mt-6 pt-4 border-t border-gray-200">
-      <h4 className="text-md font-semibold text-gray-700 mb-3 flex items-center gap-2">
-        <LineChart className="w-4 h-4" /> Price History
-      </h4>
-      <div className="bg-gray-50 p-4 rounded-lg text-sm text-gray-500 overflow-x-auto">
-        <p className="font-medium text-gray-700 mb-2">
-          (Chart Integration Placeholder)
-        </p>
-        <p>
-          Data points available: **{history.length}**. Latest Price (Yes): **{(history.at(-1)?.yesPrice * 100).toFixed(1)}¢**
-        </p>
+  const PriceTimeline = ({ history }) => {
+    // 1. Format the data for Recharts
+    const chartData = history.map((point, index) => ({
+        // Use the index as a simpler way to represent time for basic display
+        // or format the timestamp for better x-axis labels
+        time: index + 1, 
+        // Convert to percentage for better display (0 to 100)
+        'Yes Price': (point.yesPrice * 100),
+        'No Price': (point.noPrice * 100),
+        timestamp: point.timestamp, // Keep the raw timestamp for tooltips
+    }));
+
+    return (
+      <div className="mt-6 pt-4 border-t border-gray-200">
+        <h4 className="text-md font-semibold text-gray-700 mb-3 flex items-center gap-2">
+          <LineChart className="w-4 h-4" /> Price History
+        </h4>
+        
+        {/* Use a fixed height for the chart container */}
+        <div className="w-full h-64 bg-white p-2 rounded-lg border border-gray-100">
+            {chartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                        data={chartData}
+                        margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+                    >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                        <XAxis 
+                            dataKey="time" 
+                            label={{ value: 'Trades', position: 'bottom' }} 
+                            stroke="#555"
+                        />
+                        <YAxis 
+                            domain={[0, 100]} // Price is always 0% to 100%
+                            tickFormatter={(value) => `${value}¢`} 
+                            stroke="#555"
+                        />
+                        <Tooltip 
+                            formatter={(value) => [`${value.toFixed(1)}¢`, 'Price']}
+                            labelFormatter={(label, payload) => {
+                                // Display the timestamp in the tooltip
+                                if (payload.length > 0) {
+                                    return new Date(payload[0].payload.timestamp).toLocaleString();
+                                }
+                                return `Trade ${label}`;
+                            }}
+                        />
+                        {/* Line for YES Price (Green) */}
+                        <Line 
+                            type="monotone" 
+                            dataKey="Yes Price" 
+                            stroke="#10B981" 
+                            strokeWidth={2}
+                            dot={false}
+                        />
+                         {/* Line for NO Price (Red) */}
+                        <Line 
+                            type="monotone" 
+                            dataKey="No Price" 
+                            stroke="#EF4444" 
+                            strokeWidth={2}
+                            dot={false}
+                        />
+                    </LineChart>
+                </ResponsiveContainer>
+            ) : (
+                <div className="flex items-center justify-center h-full text-gray-500">
+                    No price history data available yet.
+                </div>
+            )}
+        </div>
+        
+        {/* Original summary remains outside the chart area */}
+        <div className="mt-4 text-sm text-gray-500">
+            <p>
+                Data points available: **{history.length}**. Latest Price (Yes): **{(history.at(-1)?.yesPrice * 100).toFixed(1)}¢**
+            </p>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const MarketCard = ({ market }) => {
     const [amount, setAmount] = useState('');
