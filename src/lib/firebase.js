@@ -1,9 +1,9 @@
-// src/lib/firebase.js
+// src/lib/firebase.js (CORRECT CODE)
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  // GOOD: Reads the value from the environment variable
+  // MUST use process.env.NEXT_PUBLIC_... here
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY, 
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
   projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
