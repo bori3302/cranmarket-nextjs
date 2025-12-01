@@ -1,19 +1,16 @@
-// Import the functions you need from the SDKs you need
+// src/lib/firebase.js
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
 
-// Your web app's Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyCaeSZxEgDvdNCae-G-S-dkUHt62SG6Xlg",
-  authDomain: "cranmarket-f4877.firebaseapp.com",
-  projectId: "cranmarket-f4877",
-  storageBucket: "cranmarket-f4877.firebasestorage.app",
-  messagingSenderId: "66771253484",
-  appId: "1:66771253484:web:3d92fa610581672c820dc9"
+  // GOOD: Reads the value from the environment variable
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY, 
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
