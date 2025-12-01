@@ -89,21 +89,23 @@ export default function CranMarket() {
         let tradesUpdated = false;
 
         const updatedTrades = userData.trades.map(trade => {
-          // Check if it's a trade for this market and not already settled
-          if (trade.marketId === market.id && !trade.settled) {
-            // Winning shares (shares * $1.00 payout)
-            // Only positive (Buy) shares are eligible for the $1.00 payout.
-            if (trade.position === outcome && trade.shares > 0) { 
+          // Only process UNSETTLED BUY trades for the current market
+          if (trade.marketId === market.id && !trade.settled && trade.shares > 0) { 
+            
+            // Check if the trade's position matches the market outcome
+            if (trade.position === outcome) {
+              // Winning Trade: Payout $1.00 per share
               const payout = trade.shares * 1;
               totalWinnings += payout;
               tradesUpdated = true;
               return { ...trade, settled: true, payout };
             } else {
-              // Losing shares (payout $0) or Sell trades (already settled in price)
+              // Losing Trade: Payout $0.00 per share
               tradesUpdated = true;
               return { ...trade, settled: true, payout: 0 };
             }
           }
+          // Return all other trades (already settled, or for other markets) unchanged
           return trade;
         });
 
@@ -386,20 +388,14 @@ export default function CranMarket() {
       try {
         const marketRef = doc(db, 'markets', market.id);
         const marketUpdate = {};
-        let tradeRecord = {};
-        let newYesShares = market.yesShares;
-        let newNoShares = market.noShares;
         let newBalance = user.balance;
+        let newTrades = [...user.trades];
+        let sharesRemainingToSell = sharesToTrade;
 
         if (tradeType === 'buy') {
-          // BUY LOGIC
+          // BUY LOGIC: Add the new trade to the list
           newBalance -= tradeAmount;
-          if (position === 'yes') {
-            newYesShares += sharesToTrade;
-          } else {
-            newNoShares += sharesToTrade;
-          }
-          tradeRecord = {
+          newTrades.push({
             marketId: market.id,
             marketQuestion: market.question,
             position,
@@ -408,39 +404,71 @@ export default function CranMarket() {
             price: currentPrice,
             timestamp: Date.now(),
             settled: false,
-          };
+          });
         } else {
-          // SELL LOGIC (Shares decrease, Balance increases)
+          // SELL LOGIC: Find existing, unsettled BUY trades and reduce them (FIFO)
           newBalance += tradeAmount;
-          if (position === 'yes') {
-            newYesShares -= sharesToTrade;
-          } else {
-            newNoShares -= sharesToTrade;
+          
+          // Get only the unsettled trades for this market and position, ordered by timestamp (FIFO)
+          const unsettledBuyTrades = newTrades
+            .filter(t => t.marketId === market.id && t.position === position && !t.settled && t.shares > 0)
+            .sort((a, b) => a.timestamp - b.timestamp);
+
+          // Iterate and close/reduce trades
+          for (const trade of unsettledBuyTrades) {
+            if (sharesRemainingToSell <= 0) break; // Finished selling
+
+            const closableShares = Math.min(trade.shares, sharesRemainingToSell);
+            
+            // Calculate the average price of the closed position for profit/loss calculation if needed later, 
+            // but for now, we just update the shares and track what's left to sell.
+            
+            // Reduce the shares in the existing trade
+            trade.shares -= closableShares; 
+            
+            // Mark the trade as settled if all shares are sold
+            if (trade.shares <= 0) {
+              trade.settled = true;
+            }
+            
+            sharesRemainingToSell -= closableShares;
           }
-          tradeRecord = {
-            marketId: market.id,
-            marketQuestion: market.question,
-            position,
-            amount: tradeAmount,
-            shares: -sharesToTrade, // Negative shares to represent closed position/sale
-            price: currentPrice,
-            timestamp: Date.now(),
-            settled: false, // Will be settled upon market resolution along with buys
-          };
+          
+          // Filter out trades with 0 or negative shares that were fully settled
+          newTrades = newTrades.filter(t => t.shares > 0 || !t.settled);
         }
         
         // 2. Market Update (Shares, Volume, Price History)
-        marketUpdate.yesShares = newYesShares;
-        marketUpdate.noShares = newNoShares;
         marketUpdate.volume = market.volume + tradeAmount;
 
-        // Feature 1: Update price history
-        const newPriceHistory = [...(market.priceHistory || []), {
-            timestamp: Date.now(),
-            yesPrice: newYesShares / (newYesShares + newNoShares),
-            noPrice: newNoShares / (newYesShares + newNoShares),
-        }];
-        marketUpdate.priceHistory = newPriceHistory;
+        if (tradeType === 'buy' || tradeType === 'sell') {
+            // Recompute the total market shares after the trade is processed
+            // Note: This must be done accurately based on the nature of the trade. 
+            // The original logic handles market share update better at the moment.
+            
+            // Original logic for updating market shares:
+            let newYesShares = market.yesShares;
+            let newNoShares = market.noShares;
+            
+            if (tradeType === 'buy') {
+              if (position === 'yes') newYesShares += sharesToTrade;
+              else newNoShares += sharesToTrade;
+            } else { // sell
+              if (position === 'yes') newYesShares -= sharesToTrade;
+              else newNoShares -= sharesToTrade;
+            }
+            
+            marketUpdate.yesShares = newYesShares;
+            marketUpdate.noShares = newNoShares;
+            
+            // Update price history
+            const newPriceHistory = [...(market.priceHistory || []), {
+                timestamp: Date.now(),
+                yesPrice: newYesShares / (newYesShares + newNoShares),
+                noPrice: newNoShares / (newYesShares + newNoShares),
+            }];
+            marketUpdate.priceHistory = newPriceHistory;
+        }
 
         await updateDoc(marketRef, marketUpdate);
 
@@ -448,7 +476,7 @@ export default function CranMarket() {
         const updatedUser = {
           ...user,
           balance: newBalance,
-          trades: [...user.trades, tradeRecord]
+          trades: newTrades // Use the modified list
         };
 
         await updateDoc(doc(db, 'users', user.id), {
