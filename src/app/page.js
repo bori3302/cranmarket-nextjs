@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, Users, Plus, Check, X, Trophy, Clock, DollarSign, LogOut } from 'lucide-react';
+import { TrendingUp, Users, Plus, Check, X, Trophy, Clock, DollarSign, LogOut, LineChart } from 'lucide-react';
 import { db } from '@/lib/firebase';
 import { 
   collection, 
@@ -12,8 +12,8 @@ import {
   deleteDoc,
   query,
   where,
-  orderBy,
-  onSnapshot
+  onSnapshot,
+  getDoc // <-- Added getDoc for user reload after resolution
 } from 'firebase/firestore';
 
 export default function CranMarket() {
@@ -31,39 +31,25 @@ export default function CranMarket() {
 
   useEffect(() => {
     if (user) {
-      const unsubscribeMarkets = onSnapshot(
-        collection(db, 'markets'),
-        (snapshot) => {
-          const marketsList = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }));
-          setMarkets(marketsList);
-        }
-      );
+      const marketsRef = collection(db, 'markets');
+      const pendingRef = collection(db, 'pendingMarkets');
+      const usersRef = collection(db, 'users');
 
-      const unsubscribePending = onSnapshot(
-        collection(db, 'pendingMarkets'),
-        (snapshot) => {
-          const pendingList = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }));
-          setPendingMarkets(pendingList);
-        }
-      );
+      const unsubscribeMarkets = onSnapshot(marketsRef, (snapshot) => {
+        const marketsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setMarkets(marketsList);
+      });
 
-      const unsubscribeUsers = onSnapshot(
-        collection(db, 'users'),
-        (snapshot) => {
-          const usersList = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }));
-          usersList.sort((a, b) => b.balance - a.balance);
-          setAllUsers(usersList);
-        }
-      );
+      const unsubscribePending = onSnapshot(pendingRef, (snapshot) => {
+        const pendingList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setPendingMarkets(pendingList);
+      });
+
+      const unsubscribeUsers = onSnapshot(usersRef, (snapshot) => {
+        const usersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        usersList.sort((a, b) => b.balance - a.balance);
+        setAllUsers(usersList);
+      });
 
       return () => {
         unsubscribeMarkets();
@@ -81,7 +67,72 @@ export default function CranMarket() {
     setLoading(false);
   };
 
+  /**
+   * Feature 3: Payoff logic
+   */
+  const handleMarketResolution = async (market, outcome) => {
+    if (!user.isAdmin || market.resolved) return;
+
+    try {
+      // 1. Update market state
+      const marketRef = doc(db, 'markets', market.id);
+      await updateDoc(marketRef, { resolved: true, outcome: outcome });
+
+      // 2. Calculate and distribute payoffs to all users
+      const usersRef = collection(db, 'users');
+      const usersSnapshot = await getDocs(usersRef);
+
+      for (const userDoc of usersSnapshot.docs) {
+        const userData = userDoc.data();
+        let totalWinnings = 0;
+        let tradesUpdated = false;
+
+        const updatedTrades = userData.trades.map(trade => {
+          // Check if it's a trade for this market and not already settled
+          if (trade.marketId === market.id && !trade.settled) {
+            // Winning shares (shares * $1.00 payout)
+            // Note: trade.shares is negative for Sell trades, which are already closed positions,
+            // so only positive (Buy) shares are eligible for the $1.00 payout.
+            if (trade.position === outcome && trade.shares > 0) { 
+              const payout = trade.shares * 1;
+              totalWinnings += payout;
+              tradesUpdated = true;
+              return { ...trade, settled: true, payout };
+            } else {
+              // Losing shares (payout $0) or Sell trades (already settled in price)
+              tradesUpdated = true;
+              return { ...trade, settled: true, payout: 0 };
+            }
+          }
+          return trade;
+        });
+
+        if (tradesUpdated) {
+          const newBalance = userData.balance + totalWinnings;
+          await updateDoc(doc(db, 'users', userDoc.id), {
+            balance: newBalance,
+            trades: updatedTrades
+          });
+        }
+      }
+
+      // 3. Update current user's state
+      const currentUserDoc = await getDoc(doc(db, 'users', user.id));
+      if (currentUserDoc.exists()) {
+        const updatedUser = { id: currentUserDoc.id, ...currentUserDoc.data() };
+        setUser(updatedUser);
+        localStorage.setItem('cranmarket-user', JSON.stringify(updatedUser));
+      }
+    } catch (e) {
+      console.error('Resolution error:', e);
+      alert('Error resolving market');
+    }
+  };
+
+  // --- Components ---
+
   const AuthModal = () => {
+    // ... (AuthModal component remains unchanged)
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -204,51 +255,148 @@ export default function CranMarket() {
       </div>
     );
   };
+  
+  const PriceTimeline = ({ history }) => (
+    <div className="mt-6 pt-4 border-t border-gray-200">
+      <h4 className="text-md font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <LineChart className="w-4 h-4" /> Price History
+      </h4>
+      <div className="bg-gray-50 p-4 rounded-lg text-sm text-gray-500 overflow-x-auto">
+        {/* A proper chart library (e.g., Recharts) would be integrated here.
+          The 'history' array contains all the necessary data:
+          { timestamp, yesPrice, noPrice }
+        */}
+        <p className="font-medium text-gray-700 mb-2">
+          (Chart Integration Placeholder)
+        </p>
+        <p>
+          Data points available: **{history.length}**. Latest Price (Yes): **{(history.at(-1)?.yesPrice * 100).toFixed(1)}¢**
+        </p>
+      </div>
+    </div>
+  );
 
   const MarketCard = ({ market }) => {
     const [amount, setAmount] = useState('');
-    const [position, setPosition] = useState('yes');
+    const [position, setPosition] = useState('yes'); // yes or no
+    const [tradeType, setTradeType] = useState('buy'); // buy or sell
 
     const yesPrice = market.yesShares / (market.yesShares + market.noShares);
     const noPrice = 1 - yesPrice;
+    const currentPrice = position === 'yes' ? yesPrice : noPrice;
 
+    const isExpired = market.closingDate && Date.now() > market.closingDate;
+
+    // Calculate user's net shares held for this market
+    const userTradesForMarket = user?.trades.filter(t => t.marketId === market.id && !t.settled) || [];
+    const userHoldings = userTradesForMarket.reduce((acc, trade) => {
+        // Positive shares for buys, negative for sells
+        acc[trade.position] = (acc[trade.position] || 0) + trade.shares;
+        return acc;
+    }, { yes: 0, no: 0 });
+
+    const netShares = userHoldings[position] || 0;
+    const maxTradeAmount = tradeType === 'buy' 
+        ? user.balance 
+        : netShares * currentPrice;
+
+    /**
+     * Feature 2 & 1: Sell logic and Price History update
+     */
     const handleTrade = async () => {
       const tradeAmount = parseFloat(amount);
-      if (!tradeAmount || tradeAmount <= 0 || tradeAmount > user.balance) return;
+      if (!tradeAmount || tradeAmount <= 0) return;
 
-      const price = position === 'yes' ? yesPrice : noPrice;
-      const shares = tradeAmount / price;
+      const sharesToTrade = tradeAmount / currentPrice;
 
+      // 1. Validation
+      if (tradeType === 'buy') {
+        if (tradeAmount > user.balance) {
+          alert("Insufficient balance.");
+          return;
+        }
+      } else { // 'sell'
+        if (sharesToTrade > netShares) {
+          alert(`You only hold ${netShares.toFixed(2)} ${position.toUpperCase()} shares. Cannot sell ${sharesToTrade.toFixed(2)} shares for $${tradeAmount.toFixed(2)}.`);
+          return;
+        }
+      }
+      
       try {
         const marketRef = doc(db, 'markets', market.id);
-        await updateDoc(marketRef, {
-          yesShares: position === 'yes' ? market.yesShares + shares : market.yesShares,
-          noShares: position === 'no' ? market.noShares + shares : market.noShares,
-          volume: market.volume + tradeAmount
-        });
+        const marketUpdate = {};
+        const userUpdate = {};
+        let tradeRecord = {};
+        let newYesShares = market.yesShares;
+        let newNoShares = market.noShares;
+        let newBalance = user.balance;
 
-        const trade = {
-          marketId: market.id,
-          marketQuestion: market.question,
-          position,
-          amount: tradeAmount,
-          shares,
-          price,
-          timestamp: Date.now()
-        };
+        if (tradeType === 'buy') {
+          // BUY LOGIC
+          newBalance -= tradeAmount;
+          if (position === 'yes') {
+            newYesShares += sharesToTrade;
+          } else {
+            newNoShares += sharesToTrade;
+          }
+          tradeRecord = {
+            marketId: market.id,
+            marketQuestion: market.question,
+            position,
+            amount: tradeAmount,
+            shares: sharesToTrade, // Positive shares
+            price: currentPrice,
+            timestamp: Date.now(),
+            settled: false,
+          };
+        } else {
+          // SELL LOGIC (Shares decrease, Balance increases)
+          newBalance += tradeAmount;
+          if (position === 'yes') {
+            newYesShares -= sharesToTrade;
+          } else {
+            newNoShares -= sharesToTrade;
+          }
+          tradeRecord = {
+            marketId: market.id,
+            marketQuestion: market.question,
+            position,
+            amount: tradeAmount,
+            shares: -sharesToTrade, // Negative shares to represent closed position/sale
+            price: currentPrice,
+            timestamp: Date.now(),
+            settled: false, // Will be settled upon market resolution along with buys
+          };
+        }
+        
+        // 2. Market Update (Shares, Volume, Price History)
+        marketUpdate.yesShares = newYesShares;
+        marketUpdate.noShares = newNoShares;
+        marketUpdate.volume = market.volume + tradeAmount;
 
-        const userRef = doc(db, 'users', user.id);
+        // Feature 1: Update price history
+        const newPriceHistory = [...market.priceHistory, {
+            timestamp: Date.now(),
+            yesPrice: newYesShares / (newYesShares + newNoShares),
+            noPrice: newNoShares / (newYesShares + newNoShares),
+        }];
+        marketUpdate.priceHistory = newPriceHistory;
+
+        await updateDoc(marketRef, marketUpdate);
+
+        // 3. User Update (Balance, Trades)
         const updatedUser = {
           ...user,
-          balance: user.balance - tradeAmount,
-          trades: [...user.trades, trade]
+          balance: newBalance,
+          trades: [...user.trades, tradeRecord]
         };
 
-        await updateDoc(userRef, {
+        await updateDoc(doc(db, 'users', user.id), {
           balance: updatedUser.balance,
           trades: updatedUser.trades
         });
 
+        // 4. Update local state
         setUser(updatedUser);
         localStorage.setItem('cranmarket-user', JSON.stringify(updatedUser));
         setAmount('');
@@ -258,10 +406,9 @@ export default function CranMarket() {
       }
     };
 
-    const isExpired = market.closingDate && Date.now() > market.closingDate;
-
     return (
       <div className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-lg transition-shadow">
+        {/* ... (Market Header and Price Display remain mostly the same) ... */}
         <div className="flex items-start justify-between mb-4">
           <div className="flex-1">
             <h3 className="text-lg font-semibold text-gray-900 mb-2">{market.question}</h3>
@@ -275,6 +422,11 @@ export default function CranMarket() {
                 <span className="flex items-center gap-1">
                   <Clock className="w-4 h-4" />
                   {isExpired ? 'Closed' : new Date(market.closingDate).toLocaleDateString()}
+                </span>
+              )}
+              {user && (
+                <span className="text-blue-600 font-semibold">
+                    You Hold: Yes ({userHoldings.yes.toFixed(2)}), No ({userHoldings.no.toFixed(2)})
                 </span>
               )}
             </div>
@@ -305,32 +457,55 @@ export default function CranMarket() {
 
         {!market.resolved && !isExpired && user && (
           <div className="space-y-3">
+            {/* Trade Type Switch */}
+            <div className="flex bg-gray-100 p-1 rounded-lg">
+                <button
+                    onClick={() => setTradeType('buy')}
+                    className={`flex-1 py-1 rounded-md text-sm font-semibold transition-colors ${
+                        tradeType === 'buy' ? 'bg-white shadow text-blue-600' : 'text-gray-600'
+                    }`}
+                >
+                    Buy
+                </button>
+                <button
+                    onClick={() => setTradeType('sell')}
+                    className={`flex-1 py-1 rounded-md text-sm font-semibold transition-colors ${
+                        tradeType === 'sell' ? 'bg-white shadow text-blue-600' : 'text-gray-600'
+                    }`}
+                >
+                    Sell
+                </button>
+            </div>
+            
+            {/* Position Selection */}
             <div className="flex gap-2">
               <button
                 onClick={() => setPosition('yes')}
                 className={`flex-1 py-2 rounded-lg font-semibold transition-colors ${
-                  position === 'yes' 
-                    ? 'bg-green-600 text-white' 
+                  position === 'yes'
+                    ? tradeType === 'buy' ? 'bg-green-600 text-white' : 'bg-green-400 text-white'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
-                Buy YES
+                {tradeType === 'buy' ? 'Buy YES' : 'Sell YES'}
               </button>
               <button
                 onClick={() => setPosition('no')}
                 className={`flex-1 py-2 rounded-lg font-semibold transition-colors ${
-                  position === 'no' 
-                    ? 'bg-red-600 text-white' 
+                  position === 'no'
+                    ? tradeType === 'buy' ? 'bg-red-600 text-white' : 'bg-red-400 text-white'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
-                Buy NO
+                {tradeType === 'buy' ? 'Buy NO' : 'Sell NO'}
               </button>
             </div>
+            
+            {/* Amount Input and Trade Button */}
             <div className="flex gap-2">
               <input
                 type="number"
-                placeholder="Amount"
+                placeholder={`Amount (Max: $${maxTradeAmount.toFixed(2)})`}
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -339,31 +514,35 @@ export default function CranMarket() {
                 onClick={handleTrade}
                 className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold"
               >
-                Trade
+                {tradeType === 'buy' ? 'Buy' : 'Sell'}
               </button>
             </div>
+            <p className="text-sm text-gray-500 mt-1">
+                {tradeType === 'buy' 
+                    ? `Cost per share: ${(currentPrice * 100).toFixed(1)}¢`
+                    : `Value per share: ${(currentPrice * 100).toFixed(1)}¢`
+                }
+            </p>
           </div>
         )}
-
+        
+        {/* Feature 1: Price Timeline Component */}
+        {market.priceHistory && <PriceTimeline history={market.priceHistory} />}
+        
+        {/* Feature 3: Admin Resolution Buttons */}
         {user?.isAdmin && !market.resolved && (
           <div className="mt-4 pt-4 border-t border-gray-200 flex gap-2">
             <button
-              onClick={async () => {
-                const marketRef = doc(db, 'markets', market.id);
-                await updateDoc(marketRef, { resolved: true, outcome: 'yes' });
-              }}
+              onClick={() => handleMarketResolution(market, 'yes')}
               className="flex-1 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-semibold"
             >
-              Resolve YES
+              Resolve YES (Payoff)
             </button>
             <button
-              onClick={async () => {
-                const marketRef = doc(db, 'markets', market.id);
-                await updateDoc(marketRef, { resolved: true, outcome: 'no' });
-              }}
+              onClick={() => handleMarketResolution(market, 'no')}
               className="flex-1 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-semibold"
             >
-              Resolve NO
+              Resolve NO (Payoff)
             </button>
           </div>
         )}
@@ -388,7 +567,13 @@ export default function CranMarket() {
         noShares: 50,
         volume: 0,
         resolved: false,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        // Feature 1: Initialize Price History
+        priceHistory: [{
+            timestamp: Date.now(),
+            yesPrice: 0.5,
+            noPrice: 0.5,
+        }]
       };
 
       try {
