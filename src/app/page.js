@@ -13,7 +13,7 @@ import {
   query,
   where,
   onSnapshot,
-  getDoc // <-- Added getDoc for user reload after resolution
+  getDoc
 } from 'firebase/firestore';
 
 export default function CranMarket() {
@@ -91,8 +91,7 @@ export default function CranMarket() {
           // Check if it's a trade for this market and not already settled
           if (trade.marketId === market.id && !trade.settled) {
             // Winning shares (shares * $1.00 payout)
-            // Note: trade.shares is negative for Sell trades, which are already closed positions,
-            // so only positive (Buy) shares are eligible for the $1.00 payout.
+            // Only positive (Buy) shares are eligible for the $1.00 payout.
             if (trade.position === outcome && trade.shares > 0) { 
               const payout = trade.shares * 1;
               totalWinnings += payout;
@@ -132,7 +131,6 @@ export default function CranMarket() {
   // --- Components ---
 
   const AuthModal = () => {
-    // ... (AuthModal component remains unchanged)
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -262,10 +260,6 @@ export default function CranMarket() {
         <LineChart className="w-4 h-4" /> Price History
       </h4>
       <div className="bg-gray-50 p-4 rounded-lg text-sm text-gray-500 overflow-x-auto">
-        {/* A proper chart library (e.g., Recharts) would be integrated here.
-          The 'history' array contains all the necessary data:
-          { timestamp, yesPrice, noPrice }
-        */}
         <p className="font-medium text-gray-700 mb-2">
           (Chart Integration Placeholder)
         </p>
@@ -325,7 +319,6 @@ export default function CranMarket() {
       try {
         const marketRef = doc(db, 'markets', market.id);
         const marketUpdate = {};
-        const userUpdate = {};
         let tradeRecord = {};
         let newYesShares = market.yesShares;
         let newNoShares = market.noShares;
@@ -375,7 +368,7 @@ export default function CranMarket() {
         marketUpdate.volume = market.volume + tradeAmount;
 
         // Feature 1: Update price history
-        const newPriceHistory = [...market.priceHistory, {
+        const newPriceHistory = [...(market.priceHistory || []), {
             timestamp: Date.now(),
             yesPrice: newYesShares / (newYesShares + newNoShares),
             noPrice: newNoShares / (newYesShares + newNoShares),
@@ -666,6 +659,14 @@ export default function CranMarket() {
                 <button
                   onClick={async () => {
                     const { id, ...marketData } = market;
+                    // Initialize priceHistory for approved markets
+                    if (!marketData.priceHistory) {
+                        marketData.priceHistory = [{
+                            timestamp: Date.now(),
+                            yesPrice: 0.5,
+                            noPrice: 0.5,
+                        }];
+                    }
                     await addDoc(collection(db, 'markets'), marketData);
                     await deleteDoc(doc(db, 'pendingMarkets', market.id));
                   }}
