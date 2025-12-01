@@ -1,21 +1,19 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { TrendingUp, Users, Plus, Check, X, Trophy, Clock, DollarSign, LogOut, LineChart as LineChartIcon } from 'lucide-react';
+import { TrendingUp, Users, Plus, Check, X, Trophy, Clock, DollarSign, LogOut } from 'lucide-react';
 import { db } from '@/lib/firebase';
 import { 
   collection, 
   addDoc, 
   getDocs, 
   doc, 
-  updateDoc, 
   deleteDoc,
-  query,
-  where,
   onSnapshot,
-  getDoc
+  query,
+  where
 } from 'firebase/firestore';
+import Link from 'next/link';
 
 export default function CranMarket() {
   const [user, setUser] = useState(null);
@@ -31,34 +29,32 @@ export default function CranMarket() {
   }, []);
 
   useEffect(() => {
-    if (user) {
-      const marketsRef = collection(db, 'markets');
-      const pendingRef = collection(db, 'pendingMarkets');
-      const usersRef = collection(db, 'users');
+    const marketsRef = collection(db, 'markets');
+    const pendingRef = collection(db, 'pendingMarkets');
+    const usersRef = collection(db, 'users');
 
-      const unsubscribeMarkets = onSnapshot(marketsRef, (snapshot) => {
-        const marketsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setMarkets(marketsList);
-      });
+    const unsubscribeMarkets = onSnapshot(marketsRef, (snapshot) => {
+      const marketsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setMarkets(marketsList);
+    });
 
-      const unsubscribePending = onSnapshot(pendingRef, (snapshot) => {
-        const pendingList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setPendingMarkets(pendingList);
-      });
+    const unsubscribePending = onSnapshot(pendingRef, (snapshot) => {
+      const pendingList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setPendingMarkets(pendingList);
+    });
 
-      const unsubscribeUsers = onSnapshot(usersRef, (snapshot) => {
-        const usersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        usersList.sort((a, b) => b.balance - a.balance);
-        setAllUsers(usersList);
-      });
+    const unsubscribeUsers = onSnapshot(usersRef, (snapshot) => {
+      const usersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      usersList.sort((a, b) => (b.balance || 0) - (a.balance || 0));
+      setAllUsers(usersList);
+    });
 
-      return () => {
-        unsubscribeMarkets();
-        unsubscribePending();
-        unsubscribeUsers();
-      };
-    }
-  }, [user]);
+    return () => {
+      unsubscribeMarkets();
+      unsubscribePending();
+      unsubscribeUsers();
+    };
+  }, []);
 
   const loadUserFromStorage = () => {
     const savedUser = localStorage.getItem('cranmarket-user');
@@ -66,67 +62,6 @@ export default function CranMarket() {
       setUser(JSON.parse(savedUser));
     }
     setLoading(false);
-  };
-
-  /**
-   * Feature 3: Payoff logic
-   */
-  const handleMarketResolution = async (market, outcome) => {
-    if (!user.isAdmin || market.resolved) return;
-
-    try {
-      // 1. Update market state
-      const marketRef = doc(db, 'markets', market.id);
-      await updateDoc(marketRef, { resolved: true, outcome: outcome });
-
-      // 2. Calculate and distribute payoffs to all users
-      const usersRef = collection(db, 'users');
-      const usersSnapshot = await getDocs(usersRef);
-
-      for (const userDoc of usersSnapshot.docs) {
-        const userData = userDoc.data();
-        let totalWinnings = 0;
-        let tradesUpdated = false;
-
-        const updatedTrades = userData.trades.map(trade => {
-          // Check if it's a trade for this market and not already settled
-          if (trade.marketId === market.id && !trade.settled) {
-            // Winning shares (shares * $1.00 payout)
-            // Only positive (Buy) shares are eligible for the $1.00 payout.
-            if (trade.position === outcome && trade.shares > 0) { 
-              const payout = trade.shares * 1;
-              totalWinnings += payout;
-              tradesUpdated = true;
-              return { ...trade, settled: true, payout };
-            } else {
-              // Losing shares (payout $0) or Sell trades (already settled in price)
-              tradesUpdated = true;
-              return { ...trade, settled: true, payout: 0 };
-            }
-          }
-          return trade;
-        });
-
-        if (tradesUpdated) {
-          const newBalance = userData.balance + totalWinnings;
-          await updateDoc(doc(db, 'users', userDoc.id), {
-            balance: newBalance,
-            trades: updatedTrades
-          });
-        }
-      }
-
-      // 3. Update current user's state
-      const currentUserDoc = await getDoc(doc(db, 'users', user.id));
-      if (currentUserDoc.exists()) {
-        const updatedUser = { id: currentUserDoc.id, ...currentUserDoc.data() };
-        setUser(updatedUser);
-        localStorage.setItem('cranmarket-user', JSON.stringify(updatedUser));
-      }
-    } catch (e) {
-      console.error('Resolution error:', e);
-      alert('Error resolving market');
-    }
   };
 
   // --- Components ---
@@ -166,7 +101,7 @@ export default function CranMarket() {
           }
           const userDoc = querySnapshot.docs[0];
           const userData = userDoc.data();
-          
+
           if (userData.password !== password) {
             setError('Incorrect password');
             return;
@@ -254,221 +189,14 @@ export default function CranMarket() {
       </div>
     );
   };
-  
-  const PriceTimeline = ({ history }) => {
-    // 1. Format the data for Recharts
-    const chartData = history.map((point, index) => ({
-        // Use the index as a simpler way to represent time for basic display
-        // or format the timestamp for better x-axis labels
-        time: index + 1, 
-        // Convert to percentage for better display (0 to 100)
-        'Yes Price': (point.yesPrice * 100),
-        'No Price': (point.noPrice * 100),
-        timestamp: point.timestamp, // Keep the raw timestamp for tooltips
-    }));
-
-    return (
-      <div className="mt-6 pt-4 border-t border-gray-200">
-        <h4 className="text-md font-semibold text-gray-700 mb-3 flex items-center gap-2">
-          <LineChart className="w-4 h-4" /> Price History
-        </h4>
-        
-        {/* Use a fixed height for the chart container */}
-        <div className="w-full h-64 bg-white p-2 rounded-lg border border-gray-100">
-            {chartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                    <LineChart
-                        data={chartData}
-                        margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
-                    >
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                        <XAxis 
-                            dataKey="time" 
-                            label={{ value: 'Trades', position: 'bottom' }} 
-                            stroke="#555"
-                        />
-                        <YAxis 
-                            domain={[0, 100]} // Price is always 0% to 100%
-                            tickFormatter={(value) => `${value}¢`} 
-                            stroke="#555"
-                        />
-                        <Tooltip 
-                            formatter={(value) => [`${value.toFixed(1)}¢`, 'Price']}
-                            labelFormatter={(label, payload) => {
-                                // Display the timestamp in the tooltip
-                                if (payload.length > 0) {
-                                    return new Date(payload[0].payload.timestamp).toLocaleString();
-                                }
-                                return `Trade ${label}`;
-                            }}
-                        />
-                        {/* Line for YES Price (Green) */}
-                        <Line 
-                            type="monotone" 
-                            dataKey="Yes Price" 
-                            stroke="#10B981" 
-                            strokeWidth={2}
-                            dot={false}
-                        />
-                         {/* Line for NO Price (Red) */}
-                        <Line 
-                            type="monotone" 
-                            dataKey="No Price" 
-                            stroke="#EF4444" 
-                            strokeWidth={2}
-                            dot={false}
-                        />
-                    </LineChart>
-                </ResponsiveContainer>
-            ) : (
-                <div className="flex items-center justify-center h-full text-gray-500">
-                    No price history data available yet.
-                </div>
-            )}
-        </div>
-        
-        {/* Original summary remains outside the chart area */}
-        <div className="mt-4 text-sm text-gray-500">
-            <p>
-                Data points available: **{history.length}**. Latest Price (Yes): **{(history.at(-1)?.yesPrice * 100).toFixed(1)}¢**
-            </p>
-        </div>
-      </div>
-    );
-  };
 
   const MarketCard = ({ market }) => {
-    const [amount, setAmount] = useState('');
-    const [position, setPosition] = useState('yes'); // yes or no
-    const [tradeType, setTradeType] = useState('buy'); // buy or sell
-
-    const yesPrice = market.yesShares / (market.yesShares + market.noShares);
+    const yesPrice = (market.yesShares || 0) / ((market.yesShares || 0) + (market.noShares || 0) || 1);
     const noPrice = 1 - yesPrice;
-    const currentPrice = position === 'yes' ? yesPrice : noPrice;
-
     const isExpired = market.closingDate && Date.now() > market.closingDate;
-
-    // Calculate user's net shares held for this market
-    const userTradesForMarket = user?.trades.filter(t => t.marketId === market.id && !t.settled) || [];
-    const userHoldings = userTradesForMarket.reduce((acc, trade) => {
-        // Positive shares for buys, negative for sells
-        acc[trade.position] = (acc[trade.position] || 0) + trade.shares;
-        return acc;
-    }, { yes: 0, no: 0 });
-
-    const netShares = userHoldings[position] || 0;
-    const maxTradeAmount = tradeType === 'buy' 
-        ? user.balance 
-        : netShares * currentPrice;
-
-    /**
-     * Feature 2 & 1: Sell logic and Price History update
-     */
-    const handleTrade = async () => {
-      const tradeAmount = parseFloat(amount);
-      if (!tradeAmount || tradeAmount <= 0) return;
-
-      const sharesToTrade = tradeAmount / currentPrice;
-
-      // 1. Validation
-      if (tradeType === 'buy') {
-        if (tradeAmount > user.balance) {
-          alert("Insufficient balance.");
-          return;
-        }
-      } else { // 'sell'
-        if (sharesToTrade > netShares) {
-          alert(`You only hold ${netShares.toFixed(2)} ${position.toUpperCase()} shares. Cannot sell ${sharesToTrade.toFixed(2)} shares for $${tradeAmount.toFixed(2)}.`);
-          return;
-        }
-      }
-      
-      try {
-        const marketRef = doc(db, 'markets', market.id);
-        const marketUpdate = {};
-        let tradeRecord = {};
-        let newYesShares = market.yesShares;
-        let newNoShares = market.noShares;
-        let newBalance = user.balance;
-
-        if (tradeType === 'buy') {
-          // BUY LOGIC
-          newBalance -= tradeAmount;
-          if (position === 'yes') {
-            newYesShares += sharesToTrade;
-          } else {
-            newNoShares += sharesToTrade;
-          }
-          tradeRecord = {
-            marketId: market.id,
-            marketQuestion: market.question,
-            position,
-            amount: tradeAmount,
-            shares: sharesToTrade, // Positive shares
-            price: currentPrice,
-            timestamp: Date.now(),
-            settled: false,
-          };
-        } else {
-          // SELL LOGIC (Shares decrease, Balance increases)
-          newBalance += tradeAmount;
-          if (position === 'yes') {
-            newYesShares -= sharesToTrade;
-          } else {
-            newNoShares -= sharesToTrade;
-          }
-          tradeRecord = {
-            marketId: market.id,
-            marketQuestion: market.question,
-            position,
-            amount: tradeAmount,
-            shares: -sharesToTrade, // Negative shares to represent closed position/sale
-            price: currentPrice,
-            timestamp: Date.now(),
-            settled: false, // Will be settled upon market resolution along with buys
-          };
-        }
-        
-        // 2. Market Update (Shares, Volume, Price History)
-        marketUpdate.yesShares = newYesShares;
-        marketUpdate.noShares = newNoShares;
-        marketUpdate.volume = market.volume + tradeAmount;
-
-        // Feature 1: Update price history
-        const newPriceHistory = [...(market.priceHistory || []), {
-            timestamp: Date.now(),
-            yesPrice: newYesShares / (newYesShares + newNoShares),
-            noPrice: newNoShares / (newYesShares + newNoShares),
-        }];
-        marketUpdate.priceHistory = newPriceHistory;
-
-        await updateDoc(marketRef, marketUpdate);
-
-        // 3. User Update (Balance, Trades)
-        const updatedUser = {
-          ...user,
-          balance: newBalance,
-          trades: [...user.trades, tradeRecord]
-        };
-
-        await updateDoc(doc(db, 'users', user.id), {
-          balance: updatedUser.balance,
-          trades: updatedUser.trades
-        });
-
-        // 4. Update local state
-        setUser(updatedUser);
-        localStorage.setItem('cranmarket-user', JSON.stringify(updatedUser));
-        setAmount('');
-      } catch (e) {
-        console.error('Trade error:', e);
-        alert('Error processing trade');
-      }
-    };
 
     return (
       <div className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-lg transition-shadow">
-        {/* ... (Market Header and Price Display remain mostly the same) ... */}
         <div className="flex items-start justify-between mb-4">
           <div className="flex-1">
             <h3 className="text-lg font-semibold text-gray-900 mb-2">{market.question}</h3>
@@ -476,17 +204,12 @@ export default function CranMarket() {
             <div className="flex items-center gap-4 text-sm text-gray-500">
               <span className="flex items-center gap-1">
                 <DollarSign className="w-4 h-4" />
-                ${market.volume.toFixed(0)} volume
+                ${(market.volume || 0).toFixed(0)} volume
               </span>
               {market.closingDate && (
                 <span className="flex items-center gap-1">
                   <Clock className="w-4 h-4" />
                   {isExpired ? 'Closed' : new Date(market.closingDate).toLocaleDateString()}
-                </span>
-              )}
-              {user && (
-                <span className="text-blue-600 font-semibold">
-                    You Hold: Yes ({userHoldings.yes.toFixed(2)}), No ({userHoldings.no.toFixed(2)})
                 </span>
               )}
             </div>
@@ -495,7 +218,7 @@ export default function CranMarket() {
             <div className={`px-3 py-1 rounded-full text-sm font-semibold ${
               market.outcome === 'yes' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
             }`}>
-              Resolved: {market.outcome.toUpperCase()}
+              Resolved: {market.outcome?.toUpperCase()}
             </div>
           )}
         </div>
@@ -515,97 +238,21 @@ export default function CranMarket() {
           </div>
         </div>
 
-        {!market.resolved && !isExpired && user && (
-          <div className="space-y-3">
-            {/* Trade Type Switch */}
-            <div className="flex bg-gray-100 p-1 rounded-lg">
-                <button
-                    onClick={() => setTradeType('buy')}
-                    className={`flex-1 py-1 rounded-md text-sm font-semibold transition-colors ${
-                        tradeType === 'buy' ? 'bg-white shadow text-blue-600' : 'text-gray-600'
-                    }`}
-                >
-                    Buy
-                </button>
-                <button
-                    onClick={() => setTradeType('sell')}
-                    className={`flex-1 py-1 rounded-md text-sm font-semibold transition-colors ${
-                        tradeType === 'sell' ? 'bg-white shadow text-blue-600' : 'text-gray-600'
-                    }`}
-                >
-                    Sell
-                </button>
-            </div>
-            
-            {/* Position Selection */}
-            <div className="flex gap-2">
-              <button
-                onClick={() => setPosition('yes')}
-                className={`flex-1 py-2 rounded-lg font-semibold transition-colors ${
-                  position === 'yes'
-                    ? tradeType === 'buy' ? 'bg-green-600 text-white' : 'bg-green-400 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                {tradeType === 'buy' ? 'Buy YES' : 'Sell YES'}
-              </button>
-              <button
-                onClick={() => setPosition('no')}
-                className={`flex-1 py-2 rounded-lg font-semibold transition-colors ${
-                  position === 'no'
-                    ? tradeType === 'buy' ? 'bg-red-600 text-white' : 'bg-red-400 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                {tradeType === 'buy' ? 'Buy NO' : 'Sell NO'}
-              </button>
-            </div>
-            
-            {/* Amount Input and Trade Button */}
-            <div className="flex gap-2">
-              <input
-                type="number"
-                placeholder={`Amount (Max: $${maxTradeAmount.toFixed(2)})`}
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-              <button
-                onClick={handleTrade}
-                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold"
-              >
-                {tradeType === 'buy' ? 'Buy' : 'Sell'}
-              </button>
-            </div>
-            <p className="text-sm text-gray-500 mt-1">
-                {tradeType === 'buy' 
-                    ? `Cost per share: ${(currentPrice * 100).toFixed(1)}¢`
-                    : `Value per share: ${(currentPrice * 100).toFixed(1)}¢`
-                }
-            </p>
-          </div>
-        )}
-        
-        {/* Feature 1: Price Timeline Component */}
-        {market.priceHistory && <PriceTimeline history={market.priceHistory} />}
-        
-        {/* Feature 3: Admin Resolution Buttons */}
-        {user?.isAdmin && !market.resolved && (
-          <div className="mt-4 pt-4 border-t border-gray-200 flex gap-2">
-            <button
-              onClick={() => handleMarketResolution(market, 'yes')}
-              className="flex-1 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-semibold"
-            >
-              Resolve YES (Payoff)
-            </button>
-            <button
-              onClick={() => handleMarketResolution(market, 'no')}
-              className="flex-1 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-semibold"
-            >
-              Resolve NO (Payoff)
-            </button>
-          </div>
-        )}
+        <div className="flex gap-2">
+          <Link href={`/markets/${market.id}`} className="flex-1 text-center py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold">
+            View Market
+          </Link>
+          <button
+            onClick={async () => {
+              // Quick share/copy link
+              await navigator.clipboard.writeText(`${location.origin}/markets/${market.id}`);
+              alert('Market link copied to clipboard');
+            }}
+            className="px-4 py-2 bg-gray-100 rounded-lg hover:bg-gray-200"
+          >
+            Share
+          </button>
+        </div>
       </div>
     );
   };
@@ -628,7 +275,6 @@ export default function CranMarket() {
         volume: 0,
         resolved: false,
         createdAt: Date.now(),
-        // Feature 1: Initialize Price History
         priceHistory: [{
             timestamp: Date.now(),
             yesPrice: 0.5,
@@ -658,9 +304,7 @@ export default function CranMarket() {
         <h2 className="text-2xl font-bold text-gray-900 mb-6">Create New Market</h2>
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Question
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Question</label>
             <input
               type="text"
               placeholder="Will Student A get into Harvard?"
@@ -670,9 +314,7 @@ export default function CranMarket() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Description
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
             <textarea
               placeholder="Additional context about the market..."
               value={description}
@@ -682,9 +324,7 @@ export default function CranMarket() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Closing Date (Optional)
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Closing Date (Optional)</label>
             <input
               type="datetime-local"
               value={closingDate}
@@ -693,9 +333,7 @@ export default function CranMarket() {
             />
           </div>
           {!user.isAdmin && (
-            <p className="text-sm text-amber-600 bg-amber-50 p-3 rounded-lg">
-              Your market will be submitted for admin approval before going live.
-            </p>
+            <p className="text-sm text-amber-600 bg-amber-50 p-3 rounded-lg">Your market will be submitted for admin approval before going live.</p>
           )}
           <button
             onClick={handleSubmit}
@@ -712,9 +350,7 @@ export default function CranMarket() {
     <div className="space-y-6">
       <h2 className="text-2xl font-bold text-gray-900">Pending Markets</h2>
       {pendingMarkets.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          No pending markets to review
-        </div>
+        <div className="text-center py-12 text-gray-500">No pending markets to review</div>
       ) : (
         <div className="space-y-4">
           {pendingMarkets.map(market => (
@@ -726,7 +362,6 @@ export default function CranMarket() {
                 <button
                   onClick={async () => {
                     const { id, ...marketData } = market;
-                    // Initialize priceHistory for approved markets
                     if (!marketData.priceHistory) {
                         marketData.priceHistory = [{
                             timestamp: Date.now(),
@@ -772,12 +407,10 @@ export default function CranMarket() {
                 i === 1 ? 'bg-gray-100 text-gray-700' :
                 i === 2 ? 'bg-orange-100 text-orange-700' :
                 'bg-blue-50 text-blue-600'
-              }`}>
-                {i + 1}
-              </div>
+              }`}>{i + 1}</div>
               <span className="font-medium text-gray-900">{u.email.split('@')[0]}</span>
             </div>
-            <span className="font-bold text-green-600">${u.balance.toFixed(2)}</span>
+            <span className="font-bold text-green-600">${(u.balance || 0).toFixed(2)}</span>
           </div>
         ))}
       </div>
@@ -872,7 +505,7 @@ export default function CranMarket() {
               <div className="flex items-center gap-4 pl-4 border-l border-gray-300">
                 <div className="text-right">
                   <div className="text-sm text-gray-600">{user.email.split('@')[0]}</div>
-                  <div className="text-lg font-bold text-green-600">${user.balance.toFixed(2)}</div>
+                  <div className="text-lg font-bold text-green-600">${(user.balance || 0).toFixed(2)}</div>
                 </div>
                 <button
                   onClick={handleLogout}
@@ -892,11 +525,11 @@ export default function CranMarket() {
           <div className="space-y-4">
             <h2 className="text-2xl font-bold text-gray-900 mb-6">Active Markets</h2>
             {markets.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
-                No markets yet. Be the first to create one!
-              </div>
+              <div className="text-center py-12 text-gray-500">No markets yet. Be the first to create one!</div>
             ) : (
-              markets.map(market => <MarketCard key={market.id} market={market} />)
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {markets.map(market => <MarketCard key={market.id} market={market} />)}
+              </div>
             )}
           </div>
         )}
@@ -905,6 +538,7 @@ export default function CranMarket() {
         {view === 'admin' && user.isAdmin && <AdminPanel />}
         {view === 'leaderboard' && <Leaderboard />}
       </div>
+      {showAuthModal && <AuthModal />}
     </div>
   );
 }
